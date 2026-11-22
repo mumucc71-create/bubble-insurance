@@ -37,3 +37,11 @@ JDK 17 이상, Android SDK 35, Gradle 8.10.2.
 
 ## 0.1.5
 심평원 페이지에서 명확한 동의 라벨과 체크/라디오 상태를 인식하면 큰 글씨 안내, 스크롤 방향, 항목 테두리를 표시합니다. 필수 여부를 추측하거나 전체/선택 동의를 유도하지 않으며 아무 항목도 자동 클릭하지 않습니다. 명확히 식별되지 않는 버튼은 강조하지 않습니다. 안내는 웹페이지 바깥에 배치하며 입력값이나 진료내용을 서버로 보내지 않습니다. 인증 이후 실제 심평원 페이지 호환성은 검증 전입니다.
+
+
+### 0.1.6 connection recovery
+- Recreate the portal and close old authentication windows when connecting or retrying; preserve cookies and downloaded records.
+- Allow internal about:blank navigation used by popup initialization.
+- Detect empty loaded pages and display explicit retry/home recovery for main-frame failures and preparation timeout. No TLS bypass or automatic consent.
+- Compiled with Android 35 tools; authenticated device flow is not yet verified.
+- The original debug signing key is unavailable in this environment. Delivered diagnostic APK uses package kr.bubbleinsurance.customer.test, label 버블보험 테스트, and a separate test key; it installs beside the existing app.

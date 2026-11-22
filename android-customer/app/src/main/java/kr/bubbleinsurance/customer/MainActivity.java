@@ -32,6 +32,7 @@ public class MainActivity extends Activity {
     private final java.util.Map<WebView,TextView> consentHints=new java.util.HashMap<>();
     private String consentGuideScript;
     private boolean guideLoopStarted=false;
+    private boolean connectionProblemShown=false;
     private PdfRenderer pdf;
     private ParcelFileDescriptor pdfFile;
     private int page=0;
@@ -78,18 +79,35 @@ public class MainActivity extends Activity {
         .setNegativeButton("취소",null).setPositiveButton("동의하고 계속",(d,w)->openPortal()).show();}
     private void openPortal(){
         toolbar("심평원 본인인증");
-        bar.addView(button("다시 시도",()->{if(portal!=null){portal.stopLoading();openSimpleAuth=true;selectKakao=true;beginPreparation();portal.loadUrl(HIRA);}}));
+        bar.addView(button("다시 시도",this::restartPortal));
         bar.addView(button("받은 기록",this::showRecords));
-        if(portal==null){
-            portal=new WebView(this);configure(portal);
-            configurePortal(portal);
-            portal.loadUrl(HIRA);
-        }
-        TextView hint=consentHints.get(portal);if(hint==null){hint=makeConsentHint();consentHints.put(portal,hint);}if(hint.getParent()!=null)((android.view.ViewGroup)hint.getParent()).removeView(hint);root.addView(hint);
-        attach(portal);
+        restartPortal();
         startGuideLoop();
-        if(openSimpleAuth || selectKakao)beginPreparation();
-        if(openSimpleAuth && portal.getUrl()!=null){portal.evaluateJavascript("window.__bubbleNavStarted=false", value->advanceToSimpleAuth(portal,portal.getUrl()));}
+    }
+    private void restartPortal(){
+        cancelPreparation();
+        for(WebView w:new java.util.ArrayList<>(authWindows))if(w.getTag() instanceof Dialog)((Dialog)w.getTag()).dismiss();
+        if(portal!=null){TextView hint=consentHints.remove(portal);if(hint!=null)removeCover(hint);removeCover(portal);portal.stopLoading();portal.destroy();}
+        connectionProblemShown=false;
+        openSimpleAuth=true;selectKakao=true;
+        portal=new WebView(this);configure(portal);configurePortal(portal);
+        TextView hint=makeConsentHint();consentHints.put(portal,hint);root.addView(hint);
+        attach(portal);beginPreparation();portal.loadUrl(HIRA);
+    }
+    private void connectionProblem(String reason){
+        if(isFinishing()||connectionProblemShown)return;
+        connectionProblemShown=true;cancelPreparation();
+        new AlertDialog.Builder(this).setTitle("인증 화면을 열지 못했어요")
+            .setMessage(reason).setPositiveButton("다시 시도",(d,w)->restartPortal())
+            .setNegativeButton("홈으로",(d,w)->{for(WebView v:new java.util.ArrayList<>(authWindows))if(v.getTag() instanceof Dialog)((Dialog)v.getTag()).dismiss();showHome();}).show();
+    }
+    private void checkBlankPage(WebView view,String expected){
+        loadingHandler.postDelayed(()->{
+            if(isFinishing()||view.getParent()==null||!consentHints.containsKey(view)||!expected.equals(view.getUrl()))return;
+            view.evaluateJavascript("Boolean(document.body && (document.body.innerText.trim().length || document.querySelector('input,button,iframe,canvas,svg,img')))",value->{
+                if("false".equals(value)&&view.getParent()!=null&&expected.equals(view.getUrl()))connectionProblem("페이지 내용이 표시되지 않았어요. 다시 시도를 누르면 인증 연결을 새로 시작합니다.");
+            });
+        },12000);
     }
     private void configurePortal(WebView view){
         view.getSettings().setSupportMultipleWindows(true);
@@ -98,6 +116,7 @@ public class MainActivity extends Activity {
             @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){
                 Uri u=r.getUrl();String scheme=u.getScheme();
                 if("https".equals(scheme))return false;
+                if("about:blank".equals(u.toString()))return false;
                 if(!r.isForMainFrame())return true;
                 try {
                     if("intent".equals(scheme)){
@@ -112,9 +131,9 @@ public class MainActivity extends Activity {
                 return true;
             }
             @Override public void onPageStarted(WebView v,String url,Bitmap icon){if(status!=null)status.setText("심평원 연결 중…");}
-            @Override public void onPageFinished(WebView v,String url){if(status!=null&&!downloading)status.setText("본인인증 후 기록 다운로드");advanceToSimpleAuth(v,url);advanceToKakao(v,url);updateConsentGuide(v);}
-            @Override public void onReceivedError(WebView v,WebResourceRequest r,WebResourceError e){if(r.isForMainFrame()&&status!=null)status.setText("연결 실패 · 다시 시도");}
-            @Override public void onReceivedHttpError(WebView v,WebResourceRequest r,WebResourceResponse response){if(r.isForMainFrame()&&status!=null)status.setText("사이트 응답 오류 · 다시 시도");}
+            @Override public void onPageFinished(WebView v,String url){if(status!=null&&!downloading)status.setText("본인인증 후 기록 다운로드");advanceToSimpleAuth(v,url);advanceToKakao(v,url);updateConsentGuide(v);if(url!=null)checkBlankPage(v,url);}
+            @Override public void onReceivedError(WebView v,WebResourceRequest r,WebResourceError e){if(r.isForMainFrame())connectionProblem("인터넷 연결 또는 인증 페이지를 불러오는 중 오류가 발생했어요. ("+e.getErrorCode()+")");}
+            @Override public void onReceivedHttpError(WebView v,WebResourceRequest r,WebResourceResponse response){if(r.isForMainFrame())connectionProblem("인증 사이트에서 오류가 반환됐어요. ("+response.getStatusCode()+")");}
         });
         view.setWebChromeClient(new WebChromeClient(){
             @Override public boolean onCreateWindow(WebView parent,boolean dialog,boolean gesture,Message result){
@@ -182,7 +201,7 @@ public class MainActivity extends Activity {
     private void beginPreparation(){
         removeCover(waitCover);waitCover=new BubbleWaitView(this);preparing=true;final int session=++loadingSession;
         addContentView(waitCover,new android.view.ViewGroup.LayoutParams(-1,-1));
-        loadingHandler.postDelayed(()->{if(preparing&&session==loadingSession){cancelPreparation();message("인증창 준비가 지연되고 있어요. 다시 시도하거나 현재 화면에서 간편인증을 눌러 주세요.");}},45000);
+        loadingHandler.postDelayed(()->{if(preparing&&session==loadingSession){connectionProblem("인증 화면 연결이 지연되고 있어요. 다시 시도를 누르면 새로 연결합니다.");}},45000);
     }
     private void removeCover(View cover){if(cover!=null&&cover.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)cover.getParent()).removeView(cover);}
     private void cancelPreparation(){preparing=false;loadingSession++;openSimpleAuth=false;selectKakao=false;removeCover(waitCover);waitCover=null;for(BubbleWaitView v:popupCovers.values())removeCover(v);popupCovers.clear();}
