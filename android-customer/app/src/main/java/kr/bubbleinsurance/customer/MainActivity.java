@@ -33,6 +33,7 @@ public class MainActivity extends Activity {
     private String consentGuideScript;
     private boolean guideLoopStarted=false;
     private boolean connectionProblemShown=false;
+    private boolean noticeOpen=false;
     private PdfRenderer pdf;
     private ParcelFileDescriptor pdfFile;
     private int page=0;
@@ -73,7 +74,7 @@ public class MainActivity extends Activity {
     private void attach(View v){if(v.getParent()!=null)((android.view.ViewGroup)v.getParent()).removeView(v);root.addView(v,new LinearLayout.LayoutParams(-1,0,1));}
     private void showHome(){cancelPreparation();closePdf();root.removeAllViews();attach(home);}
     private Button button(String label,Runnable action){Button b=new Button(this);b.setText(label);b.setTextColor(NAVY);b.setOnClickListener(v->action.run());return b;}
-    private void toolbar(String title){root.removeAllViews();bar=new LinearLayout(this);bar.setGravity(Gravity.CENTER_VERTICAL);bar.addView(button("닫기",this::showHome));status=new TextView(this);status.setText(title);status.setTextColor(NAVY);bar.addView(status,new LinearLayout.LayoutParams(0,-2,1));root.addView(bar);}
+    private void toolbar(String title){root.removeAllViews();bar=new LinearLayout(this);bar.setGravity(Gravity.CENTER_VERTICAL);bar.addView(button("닫기",this::showHome));status=new TextView(this);status.setText(title);status.setTextColor(NAVY);status.setSingleLine(true);status.setEllipsize(android.text.TextUtils.TruncateAt.END);status.setTextSize(15);bar.addView(status,new LinearLayout.LayoutParams(0,-2,1));root.addView(bar);}
     private void consent(){new AlertDialog.Builder(this).setTitle("진료정보 연결")
         .setMessage("심평원에서 본인인증 후 다운로드를 눌러 주세요. 지원되는 진료기록 파일은 버블 앱 내부에 저장됩니다.\n\n이 시험 버전은 서버나 설계사에게 전송하지 않습니다. 실제 심평원 인증·다운로드 호환성을 확인하는 단계입니다.")
         .setNegativeButton("취소",null).setPositiveButton("동의하고 계속",(d,w)->openPortal()).show();}
@@ -184,11 +185,11 @@ public class MainActivity extends Activity {
         TextView hint=consentHints.get(view);if(hint==null)return;String url=view.getUrl();
         if(preparing||url==null||!trusted(Uri.parse(url))||"/anyid".equals(Uri.parse(url).getPath())||consentGuideScript==null){hint.setVisibility(View.GONE);return;}
         final String expected=url;
-        view.evaluateJavascript(consentGuideScript+";JSON.stringify(window.__bubbleConsentGuide.state)",result->{
+        view.evaluateJavascript(consentGuideScript+";JSON.stringify({state:window.__bubbleConsentGuide.state,intro:window.__bubbleConsentGuide.intro()})",result->{
             if(isFinishing()||!expected.equals(view.getUrl())||!consentHints.containsKey(view))return;
             try{
                 Object decoded=new org.json.JSONTokener(result).nextValue();if(!(decoded instanceof String))return;
-                org.json.JSONObject state=new org.json.JSONObject((String)decoded);String kind=state.optString("kind");String text="";
+                org.json.JSONObject payload=new org.json.JSONObject((String)decoded);org.json.JSONObject intro=payload.optJSONObject("intro");if(intro!=null&&!noticeOpen){showNotice(view,expected,intro.optString("text"));return;}org.json.JSONObject state=payload.getJSONObject("state");String kind=state.optString("kind");String text="";
                 if("scroll".equals(kind))text="up".equals(state.optString("direction"))?"↑ 위로 조금 올려주세요":"↓ 아래로 내려주세요";
                 else if("consent".equals(kind))text="☝ 내용을 확인하고\n동의하시면 표시된 항목을 눌러주세요";
                 else if("next".equals(kind))text="☝ 선택 내용을 확인한 뒤\n테두리가 표시된 버튼을 눌러주세요";
@@ -197,6 +198,27 @@ public class MainActivity extends Activity {
                 if(text.isEmpty()){hint.setVisibility(View.GONE);}else{if(!text.contentEquals(hint.getText()))hint.setText(text);hint.setVisibility(View.VISIBLE);}
             }catch(Exception ignored){hint.setVisibility(View.GONE);}
         });
+    }
+    private void showNotice(WebView view,String expected,String text){
+        if(text.isEmpty()||noticeOpen)return;
+        noticeOpen=true;
+        LinearLayout body=new LinearLayout(this);body.setOrientation(LinearLayout.VERTICAL);
+        int pad=(int)(16*getResources().getDisplayMetrics().density);body.setPadding(pad,pad,pad,pad);
+        TextView explanation=new TextView(this);explanation.setText("심평원 안내를 확인해 주세요. 동의를 표시하면 다음 단계로 이동합니다.");explanation.setTextSize(18);body.addView(explanation);
+        ScrollView scroll=new ScrollView(this);TextView notice=new TextView(this);notice.setText(text);notice.setTextSize(18);notice.setPadding(0,pad,0,pad);scroll.addView(notice);
+        body.addView(scroll,new LinearLayout.LayoutParams(-1,(int)(getResources().getDisplayMetrics().heightPixels*.42)));
+        CheckBox agree=new CheckBox(this);agree.setText("위 안내를 확인했고 동의합니다");agree.setTextSize(19);body.addView(agree);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("진료정보 열람 안내").setView(body).setNegativeButton("나중에",null).create();
+        dialog.setOnDismissListener(d->{noticeOpen=false;if(consentHints.containsKey(view)&&expected.equals(view.getUrl()))view.evaluateJavascript("window.__bubbleConsentGuide&&window.__bubbleConsentGuide.dismissIntro()",null);});
+        agree.setOnCheckedChangeListener((b,checked)->{
+            if(!checked)return;
+            agree.setEnabled(false);
+            if(!consentHints.containsKey(view)||!expected.equals(view.getUrl())){dialog.dismiss();return;}
+            view.evaluateJavascript("window.__bubbleConsentGuide&&window.__bubbleConsentGuide.acceptIntro("+org.json.JSONObject.quote(text)+")",result->{
+                dialog.dismiss();if(!"true".equals(result))message("화면이 변경되어 자동으로 이동하지 않았어요. 현재 화면의 안내를 확인해 주세요.");
+            });
+        });
+        dialog.show();
     }
     private void beginPreparation(){
         removeCover(waitCover);waitCover=new BubbleWaitView(this);preparing=true;final int session=++loadingSession;

@@ -13,6 +13,7 @@
     if (items.some(x => x.kind === 'decline' && x.checked)) return {kind:'declined'};
     const item = items.find(x => x.kind === 'agree' && !x.checked && !x.disabled);
     if (item) return {kind:'consent', id:item.id};
+    if (items.some(x => x.kind === 'agree' && !x.checked)) return {kind:'unknown'};
     if (items.some(x => x.kind === 'agree')) return {kind:'next'};
     return {kind:'unknown'};
   }
@@ -20,6 +21,15 @@
   const KEY='__bubbleConsentGuide';
   if (window[KEY]) {window[KEY].update();return;}
   let marked=null, oldOutline='', oldOffset='';
+  let introHandled=false;
+  function introNotice(){
+    if(introHandled)return null;
+    const scope=document.querySelector('main,#contents,#content')||document.body;
+    const text=(scope.innerText||'').trim();
+    const targets=Array.from(document.querySelectorAll('a,button,input[type=button],input[type=submit]')).filter(el=>available(el)&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&(el.value||el.textContent||'').replace(/\s/g,'')==='확인후다음으로이동');
+    if(!text.includes('서비스 추진배경 및 목적')||targets.length!==1||text.length>24000)return null;
+    return {text,button:targets[0]};
+  }
   function clear(){if(marked){marked.style.outline=oldOutline;marked.style.outlineOffset=oldOffset;marked=null;}}
   function labelFor(el){
     const labels=el.labels?Array.from(el.labels):[];
@@ -49,6 +59,21 @@
     }else api.state={kind:'none'};
     return api.state;
   },clear};
+  api.intro=function(){const n=introNotice();return n?{text:n.text}:null;};
+  api.dismissIntro=function(){introHandled=true;};
+  api.acceptIntro=function(expected){
+    const n=introNotice();if(!n||n.text!==expected)return false;
+    introHandled=true;n.button.click();return true;
+  };
+  document.addEventListener('change',function(event){
+    if(!event.isTrusted || !event.target.matches('input[type=checkbox],input[type=radio]'))return;
+    if(classifyLabel(labelFor(event.target).text)!=='agree'||!event.target.checked)return;
+    const form=event.target.form;if(!form)return;
+    const items=Array.from(form.querySelectorAll('input[type=checkbox],input[type=radio]')).map(el=>({kind:classifyLabel(labelFor(el).text),checked:el.checked,disabled:el.disabled}));
+    if(nextStep(items).kind!=='next')return;
+    const buttons=Array.from(form.querySelectorAll('button,a,input[type=submit],input[type=button]')).filter(el=>available(el)&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&/^(다음|다음단계|확인|동의하고계속|동의후계속)$/.test((el.value||el.textContent||'').replace(/\s/g,'')));
+    if(buttons.length===1)buttons[0].click();
+  });
   window[KEY]=api;
   api.update();
 })();
