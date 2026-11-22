@@ -23,6 +23,7 @@ public class MainActivity extends Activity {
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private boolean downloading=false;
     private boolean openSimpleAuth=false;
+    private boolean selectKakao=false;
     private PdfRenderer pdf;
     private ParcelFileDescriptor pdfFile;
     private int page=0;
@@ -42,7 +43,7 @@ public class MainActivity extends Activity {
             @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){
                 if(!r.isForMainFrame())return false;
                 if("bubble.local".equals(r.getUrl().getHost())){
-                    if("/connect".equals(r.getUrl().getPath())) {openSimpleAuth=true;openPortal();}
+                    if("/connect".equals(r.getUrl().getPath())) {openSimpleAuth=true;selectKakao=true;openPortal();}
                     else if("/records".equals(r.getUrl().getPath())) showRecords();
                 }
                 return true;
@@ -99,7 +100,7 @@ public class MainActivity extends Activity {
                 return true;
             }
             @Override public void onPageStarted(WebView v,String url,Bitmap icon){if(status!=null)status.setText("심평원 연결 중…");}
-            @Override public void onPageFinished(WebView v,String url){if(status!=null&&!downloading)status.setText("본인인증 후 기록 다운로드");advanceToSimpleAuth(v,url);}
+            @Override public void onPageFinished(WebView v,String url){if(status!=null&&!downloading)status.setText("본인인증 후 기록 다운로드");advanceToSimpleAuth(v,url);advanceToKakao(v,url);}
             @Override public void onReceivedError(WebView v,WebResourceRequest r,WebResourceError e){if(r.isForMainFrame()&&status!=null)status.setText("연결 실패 · 다시 시도");}
             @Override public void onReceivedHttpError(WebView v,WebResourceRequest r,WebResourceResponse response){if(r.isForMainFrame()&&status!=null)status.setText("사이트 응답 오류 · 다시 시도");}
         });
@@ -129,6 +130,15 @@ public class MainActivity extends Activity {
         // Only advance the two public navigation controls. Never fill identity fields,
         // choose a certificate provider, accept terms or submit an authentication request.
         view.evaluateJavascript("(function(){if(window.__bubbleNavStarted)return;window.__bubbleNavStarted=true;let n=0;function next(){let a="+selector+";if(a&&a.getClientRects().length){a.click();return;}if(++n<60)setTimeout(next,500);}next();})()",null);
+    }
+    private void advanceToKakao(WebView view,String url){
+        if(!selectKakao || url==null || !authWindows.contains(view))return;
+        Uri uri=Uri.parse(url);
+        if(!"https".equals(uri.getScheme()) || !"easysign.anyid.go.kr".equals(uri.getHost()) || !"/esign/".equals(uri.getPath()))return;
+        selectKakao=false;
+        // The user explicitly chose Kakao as the initial provider. No identity values,
+        // consent checkboxes or authentication submission are touched.
+        view.evaluateJavascript("(function(){if(window.__bubbleKakaoStarted)return;window.__bubbleKakaoStarted=true;let n=0;function choose(){let img=document.querySelector('img[alt=\"KAKAO(카카오)\"]');let a=img&&img.closest('a');if(a&&a.getClientRects().length){a.click();return;}if(++n<60)setTimeout(choose,500);}choose();})()",null);
     }
     private static boolean unsafeScheme(String s){return s==null||s.matches("(?i)(file|content|javascript|data|http|intent|about)");}
     static boolean trusted(Uri u){String h=u.getHost();return "https".equals(u.getScheme())&&h!=null&&(h.equals("hira.or.kr")||h.endsWith(".hira.or.kr"))&&(u.getPort()==-1||u.getPort()==443);}
