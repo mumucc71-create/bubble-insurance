@@ -93,7 +93,18 @@ public class MainActivity extends Activity {
         openSimpleAuth=true;selectKakao=true;
         portal=new WebView(this);configure(portal);configurePortal(portal);
         TextView hint=makeConsentHint();consentHints.put(portal,hint);root.addView(hint);
-        attach(portal);beginPreparation();portal.loadUrl(HIRA);
+        attach(portal);beginPreparation();
+        // Cookies belong to this app WebView profile, not the Kakao app or the system browser.
+        // Wait for deletion before loading HIRA so an old authenticated session cannot win the race.
+        final WebView freshPortal=portal;final int request=loadingSession;
+        portal.clearCache(true);
+        WebStorage.getInstance().deleteOrigin("https://www.hira.or.kr");
+        WebStorage.getInstance().deleteOrigin("https://hira.or.kr");
+        WebStorage.getInstance().deleteOrigin("https://easysign.anyid.go.kr");
+        android.webkit.CookieManager.getInstance().removeAllCookies(removed->{
+            android.webkit.CookieManager.getInstance().flush();
+            if(!isFinishing()&&!isDestroyed()&&portal==freshPortal&&request==loadingSession&&preparing)freshPortal.loadUrl(HIRA);
+        });
     }
     private void connectionProblem(String reason){
         if(isFinishing()||connectionProblemShown)return;
