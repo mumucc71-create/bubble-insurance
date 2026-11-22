@@ -24,6 +24,11 @@ public class MainActivity extends Activity {
     private boolean downloading=false;
     private boolean openSimpleAuth=false;
     private boolean selectKakao=false;
+    private final Handler loadingHandler=new Handler(Looper.getMainLooper());
+    private BubbleWaitView waitCover;
+    private final java.util.Map<WebView,BubbleWaitView> popupCovers=new java.util.HashMap<>();
+    private int loadingSession=0;
+    private boolean preparing=false;
     private PdfRenderer pdf;
     private ParcelFileDescriptor pdfFile;
     private int page=0;
@@ -61,7 +66,7 @@ public class MainActivity extends Activity {
         w.setWebChromeClient(new WebChromeClient());
     }
     private void attach(View v){if(v.getParent()!=null)((android.view.ViewGroup)v.getParent()).removeView(v);root.addView(v,new LinearLayout.LayoutParams(-1,0,1));}
-    private void showHome(){closePdf();root.removeAllViews();attach(home);}
+    private void showHome(){cancelPreparation();closePdf();root.removeAllViews();attach(home);}
     private Button button(String label,Runnable action){Button b=new Button(this);b.setText(label);b.setTextColor(NAVY);b.setOnClickListener(v->action.run());return b;}
     private void toolbar(String title){root.removeAllViews();bar=new LinearLayout(this);bar.setGravity(Gravity.CENTER_VERTICAL);bar.addView(button("닫기",this::showHome));status=new TextView(this);status.setText(title);status.setTextColor(NAVY);bar.addView(status,new LinearLayout.LayoutParams(0,-2,1));root.addView(bar);}
     private void consent(){new AlertDialog.Builder(this).setTitle("진료정보 연결")
@@ -69,7 +74,7 @@ public class MainActivity extends Activity {
         .setNegativeButton("취소",null).setPositiveButton("동의하고 계속",(d,w)->openPortal()).show();}
     private void openPortal(){
         toolbar("심평원 본인인증");
-        bar.addView(button("다시 시도",()->{if(portal!=null){portal.stopLoading();portal.loadUrl(HIRA);}}));
+        bar.addView(button("다시 시도",()->{if(portal!=null){portal.stopLoading();openSimpleAuth=true;selectKakao=true;beginPreparation();portal.loadUrl(HIRA);}}));
         bar.addView(button("받은 기록",this::showRecords));
         if(portal==null){
             portal=new WebView(this);configure(portal);
@@ -77,6 +82,7 @@ public class MainActivity extends Activity {
             portal.loadUrl(HIRA);
         }
         attach(portal);
+        if(openSimpleAuth || selectKakao)beginPreparation();
         if(openSimpleAuth && portal.getUrl()!=null){portal.evaluateJavascript("window.__bubbleNavStarted=false", value->advanceToSimpleAuth(portal,portal.getUrl()));}
     }
     private void configurePortal(WebView view){
@@ -112,7 +118,9 @@ public class MainActivity extends Activity {
                 WebView child=new WebView(MainActivity.this);configure(child);configurePortal(child);
                 Dialog popup=new Dialog(MainActivity.this);LinearLayout layout=new LinearLayout(MainActivity.this);layout.setOrientation(LinearLayout.VERTICAL);
                 layout.addView(button("인증 창 닫기",popup::dismiss));layout.addView(child,new LinearLayout.LayoutParams(-1,0,1));
-                popup.setContentView(layout);popup.setOnDismissListener(d->{authWindows.remove(child);child.destroy();});
+                FrameLayout stage=new FrameLayout(MainActivity.this);stage.setBackgroundColor(Color.WHITE);stage.addView(layout,new FrameLayout.LayoutParams(-1,-1));
+                if(preparing){BubbleWaitView cover=new BubbleWaitView(MainActivity.this);popupCovers.put(child,cover);stage.addView(cover,new FrameLayout.LayoutParams(-1,-1));}
+                popup.setContentView(stage);popup.setOnDismissListener(d->{popupCovers.remove(child);authWindows.remove(child);child.destroy();if(preparing)cancelPreparation();});
                 authWindows.add(child);popup.show();popup.getWindow().setLayout(-1,-1);
                 child.setTag(popup);
                 ((WebView.WebViewTransport)result.obj).setWebView(child);result.sendToTarget();return true;
@@ -138,7 +146,24 @@ public class MainActivity extends Activity {
         selectKakao=false;
         // The user explicitly chose Kakao as the initial provider. No identity values,
         // consent checkboxes or authentication submission are touched.
-        view.evaluateJavascript("(function(){if(window.__bubbleKakaoStarted)return;window.__bubbleKakaoStarted=true;let n=0;function choose(){let img=document.querySelector('img[alt=\"KAKAO(카카오)\"]');let a=img&&img.closest('a');if(a&&a.getClientRects().length){a.click();return;}if(++n<60)setTimeout(choose,500);}choose();})()",null);
+        view.evaluateJavascript("(function(){if(window.__bubbleKakaoStarted)return;window.__bubbleKakaoStarted=true;let n=0;function choose(){let img=document.querySelector('img[alt=\"KAKAO(카카오)\"]');let a=img&&img.closest('a');if(a&&a.getClientRects().length){a.click();requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__bubbleKakaoReady=true;}));return;}if(++n<60)setTimeout(choose,500);}choose();})()",null);
+        checkAuthReady(view,loadingSession,0);
+    }
+    private void beginPreparation(){
+        removeCover(waitCover);waitCover=new BubbleWaitView(this);preparing=true;final int session=++loadingSession;
+        addContentView(waitCover,new android.view.ViewGroup.LayoutParams(-1,-1));
+        loadingHandler.postDelayed(()->{if(preparing&&session==loadingSession){cancelPreparation();message("인증창 준비가 지연되고 있어요. 다시 시도하거나 현재 화면에서 간편인증을 눌러 주세요.");}},45000);
+    }
+    private void removeCover(View cover){if(cover!=null&&cover.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)cover.getParent()).removeView(cover);}
+    private void cancelPreparation(){preparing=false;loadingSession++;openSimpleAuth=false;selectKakao=false;removeCover(waitCover);waitCover=null;for(BubbleWaitView v:popupCovers.values())removeCover(v);popupCovers.clear();}
+    private void checkAuthReady(WebView view,int session,int attempt){
+        if(!preparing||session!=loadingSession||!authWindows.contains(view)||attempt>=80)return;
+        String current=view.getUrl();if(current==null||!"easysign.anyid.go.kr".equals(Uri.parse(current).getHost()))return;
+        view.evaluateJavascript("Boolean(window.__bubbleKakaoReady && Array.from(document.querySelectorAll('input')).some(e=>e.type==='text'&&e.getClientRects().length))",value->{
+            if(!preparing||session!=loadingSession)return;
+            if("true".equals(value)){cancelPreparation();}
+            else loadingHandler.postDelayed(()->checkAuthReady(view,session,attempt+1),350);
+        });
     }
     private static boolean unsafeScheme(String s){return s==null||s.matches("(?i)(file|content|javascript|data|http|intent|about)");}
     static boolean trusted(Uri u){String h=u.getHost();return "https".equals(u.getScheme())&&h!=null&&(h.equals("hira.or.kr")||h.endsWith(".hira.or.kr"))&&(u.getPort()==-1||u.getPort()==443);}
@@ -195,6 +220,6 @@ public class MainActivity extends Activity {
     private void renderPage(){if(pdf==null||pdf.getPageCount()==0)return;try(PdfRenderer.Page p=pdf.openPage(page)){int width=Math.min(getResources().getDisplayMetrics().widthPixels,1600);int height=Math.min(5000,Math.max(1,(int)((double)width*p.getHeight()/p.getWidth())));Bitmap b=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);b.eraseColor(Color.WHITE);p.render(b,null,null,PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);preview.setImageBitmap(b);pageLabel.setText((page+1)+" / "+pdf.getPageCount());}}
     private void closePdf(){if(pdf!=null){pdf.close();pdf=null;}if(pdfFile!=null){try{pdfFile.close();}catch(IOException ignored){}pdfFile=null;}}
     private void message(String s){if(!isFinishing())new AlertDialog.Builder(this).setMessage(s).setPositiveButton("확인",null).show();}
-    @Override public void onBackPressed(){if(home.getParent()!=null){super.onBackPressed();}else if(portal!=null&&portal.getParent()!=null&&portal.canGoBack())portal.goBack();else showHome();}
-    @Override protected void onDestroy(){closePdf();for(WebView w:new java.util.ArrayList<>(authWindows)){if(w.getTag() instanceof Dialog)((Dialog)w.getTag()).dismiss();}worker.shutdownNow();if(portal!=null)portal.destroy();if(home!=null)home.destroy();super.onDestroy();}
+    @Override public void onBackPressed(){if(preparing){cancelPreparation();showHome();return;}if(home.getParent()!=null){super.onBackPressed();}else if(portal!=null&&portal.getParent()!=null&&portal.canGoBack())portal.goBack();else showHome();}
+    @Override protected void onDestroy(){cancelPreparation();loadingHandler.removeCallbacksAndMessages(null);closePdf();for(WebView w:new java.util.ArrayList<>(authWindows)){if(w.getTag() instanceof Dialog)((Dialog)w.getTag()).dismiss();}worker.shutdownNow();if(portal!=null)portal.destroy();if(home!=null)home.destroy();super.onDestroy();}
 }
