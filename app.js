@@ -9,14 +9,14 @@ function smsLink(c){
  const phone=String(c.phone||'').replace(/[\s()-]/g,'');
  if(!/^(?:01[016789]\d{7,8}|\+\d{8,15})$/.test(phone))return '';
  const recipient=phone.startsWith('+')?phone:'+82'+phone.slice(1);
- const url=new URL('invite.html',location.href).href;
+ const url=new URL('invite.html?v=customer-design-1',location.href).href;
  const message=c.name+' 고객님, 버블보험 고객 초대 링크입니다.\n'+url;
  return 'sms:'+recipient+'?body='+encodeURIComponent(message);
 }
 $('#add').onclick=()=>$('#modal').showModal();$('#inviteMain').onclick=copyInviteUrl;document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close());$('#customerForm').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target),name=String(f.get('name')||'').trim(),phone=String(f.get('phone')||'').replace(/[\s()-]/g,'');if(!name)return toast('고객 이름을 입력해 주세요.');if(!/^(?:01[016789]\d{7,8}|\+\d{8,15})$/.test(phone))return toast('휴대폰 번호를 확인해 주세요.');clients.unshift({name,phone,memo:String(f.get('memo')||'').trim(),status:'초대 전',desc:'아직 초대하지 않았어요'});const saved=saveClients();selected=0;filter='all';$('#search').value='';document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('selected',b.dataset.filter==='all'));render();$('#modal').close();e.target.reset();$('.sectiontitle').scrollIntoView({behavior:'smooth',block:'start'});toast(saved?'고객을 등록했습니다.':'고객을 등록했지만 이 브라우저에 저장하지 못했습니다.');};$('#copy').onclick=async()=>{try{await navigator.clipboard.writeText($('#inviteText').value);toast('안내 문구를 복사했습니다.')}catch{toast('안내 문구를 선택해 복사해 주세요.')}};$('#searchToggle').onclick=()=>{const l=$('.search');l.hidden=!l.hidden;if(!l.hidden)$('#search').focus()};$('#search').oninput=render;$('#filters').onclick=e=>{const b=e.target.closest('[data-filter]');if(!b)return;filter=b.dataset.filter;document.querySelectorAll('[data-filter]').forEach(x=>x.classList.toggle('selected',x===b));render()};$('#ask').onclick=()=>toast('상담 기능은 준비 중입니다.');$('[data-notice]').onclick=()=>toast('새 알림이 없습니다.');document.querySelectorAll('[data-bottom]').forEach(b=>b.onclick=()=>{if(b.dataset.bottom==='home')window.scrollTo({top:0,behavior:'smooth'});else if(b.dataset.bottom==='clients')$('.sectiontitle').scrollIntoView({behavior:'smooth'});else toast(b.textContent.trim()+' 기능은 준비 중입니다.')});render();
 
 async function copyInviteUrl(){
- const url=new URL('invite.html',location.href).href;
+ const url=new URL('invite.html?v=customer-design-1',location.href).href;
  try{await navigator.clipboard.writeText(url);toast('고객 초대 URL을 복사했습니다.');}
  catch{const field=document.createElement('textarea');field.value=url;field.setAttribute('readonly','');field.style.position='fixed';field.style.opacity='0';document.body.append(field);field.select();let copied=false;try{copied=document.execCommand('copy')}catch{}field.remove();if(copied)toast('고객 초대 URL을 복사했습니다.');else{const d=document.createElement('dialog');const title=document.createElement('h2');title.textContent='고객 초대 URL';const input=document.createElement('input');input.value=url;input.readOnly=true;input.setAttribute('aria-label','고객 초대 URL');const close=document.createElement('button');close.textContent='닫기';close.className='primary';close.onclick=()=>{d.close();d.remove()};d.append(title,input,close);document.body.append(d);d.showModal();input.select();}}
 }
