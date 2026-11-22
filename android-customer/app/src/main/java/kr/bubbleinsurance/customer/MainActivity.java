@@ -18,6 +18,7 @@ public class MainActivity extends Activity {
     private static final int NAVY=Color.rgb(13,44,77);
     private LinearLayout root, bar;
     private WebView home, portal;
+    private final java.util.ArrayList<WebView> authWindows=new java.util.ArrayList<>();
     private TextView status;
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private boolean downloading=false;
@@ -66,28 +67,55 @@ public class MainActivity extends Activity {
         .setNegativeButton("취소",null).setPositiveButton("동의하고 계속",(d,w)->openPortal()).show();}
     private void openPortal(){
         toolbar("심평원 본인인증");
+        bar.addView(button("다시 시도",()->{if(portal!=null){portal.stopLoading();portal.loadUrl(HIRA);}}));
         bar.addView(button("받은 기록",this::showRecords));
         if(portal==null){
             portal=new WebView(this);configure(portal);
-            portal.setWebViewClient(new WebViewClient(){
-                @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){
-                    Uri u=r.getUrl();String scheme=u.getScheme();
-                    if("https".equals(scheme))return false;
-                    if(!r.isForMainFrame())return true;
-                    if("intent".equals(scheme)){
-                        try {Intent i=Intent.parseUri(u.toString(),Intent.URI_INTENT_SCHEME);i.addCategory(Intent.CATEGORY_BROWSABLE);i.setComponent(null);i.setSelector(null);startActivity(i);}catch(Exception e){message("인증 앱을 열 수 없습니다. 설치 여부를 확인해 주세요.");}
-                    } else if(scheme!=null && !scheme.matches("(?i)(file|content|javascript|data|http)")){
-                        try{startActivity(new Intent(Intent.ACTION_VIEW,u));}catch(Exception e){message("인증 앱을 열 수 없습니다.");}
-                    }
-                    return true;
-                }
-                @Override public void onReceivedError(WebView v,WebResourceRequest r,WebResourceError e){if(r.isForMainFrame())status.setText("연결 실패 · 다시 열어 주세요");}
-            });
-            portal.setDownloadListener((url,agent,disposition,mime,size)->receive(url,agent,size));
+            configurePortal(portal);
             portal.loadUrl(HIRA);
         }
         attach(portal);
     }
+    private void configurePortal(WebView view){
+        view.getSettings().setSupportMultipleWindows(true);
+        view.setWebViewClient(new WebViewClient(){
+            @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){
+                Uri u=r.getUrl();String scheme=u.getScheme();
+                if("https".equals(scheme))return false;
+                if(!r.isForMainFrame())return true;
+                try {
+                    if("intent".equals(scheme)){
+                        Intent i=Intent.parseUri(u.toString(),Intent.URI_INTENT_SCHEME);
+                        i.addCategory(Intent.CATEGORY_BROWSABLE);i.setComponent(null);i.setSelector(null);
+                        i.setAction(Intent.ACTION_VIEW);i.setFlags(0);
+                        Uri data=i.getData();
+                        if(data==null || unsafeScheme(data.getScheme()))throw new IllegalArgumentException();
+                        startActivity(i);
+                    }else if(!unsafeScheme(scheme))startActivity(new Intent(Intent.ACTION_VIEW,u));
+                }catch(Exception e){message("인증 앱을 열지 못했어요. 해당 인증 앱의 설치 여부를 확인해 주세요.");}
+                return true;
+            }
+            @Override public void onPageStarted(WebView v,String url,Bitmap icon){if(status!=null)status.setText("심평원 연결 중…");}
+            @Override public void onPageFinished(WebView v,String url){if(status!=null&&!downloading)status.setText("본인인증 후 기록 다운로드");}
+            @Override public void onReceivedError(WebView v,WebResourceRequest r,WebResourceError e){if(r.isForMainFrame()&&status!=null)status.setText("연결 실패 · 다시 시도");}
+            @Override public void onReceivedHttpError(WebView v,WebResourceRequest r,WebResourceResponse response){if(r.isForMainFrame()&&status!=null)status.setText("사이트 응답 오류 · 다시 시도");}
+        });
+        view.setWebChromeClient(new WebChromeClient(){
+            @Override public boolean onCreateWindow(WebView parent,boolean dialog,boolean gesture,Message result){
+                if(!gesture || authWindows.size()>=3)return false;
+                WebView child=new WebView(MainActivity.this);configure(child);configurePortal(child);
+                Dialog popup=new Dialog(MainActivity.this);LinearLayout layout=new LinearLayout(MainActivity.this);layout.setOrientation(LinearLayout.VERTICAL);
+                layout.addView(button("인증 창 닫기",popup::dismiss));layout.addView(child,new LinearLayout.LayoutParams(-1,0,1));
+                popup.setContentView(layout);popup.setOnDismissListener(d->{authWindows.remove(child);child.destroy();});
+                authWindows.add(child);popup.show();popup.getWindow().setLayout(-1,-1);
+                child.setTag(popup);
+                ((WebView.WebViewTransport)result.obj).setWebView(child);result.sendToTarget();return true;
+            }
+            @Override public void onCloseWindow(WebView window){if(window.getTag() instanceof Dialog)((Dialog)window.getTag()).dismiss();}
+        });
+        view.setDownloadListener((url,agent,disposition,mime,size)->receive(url,agent,size));
+    }
+    private static boolean unsafeScheme(String s){return s==null||s.matches("(?i)(file|content|javascript|data|http|intent|about)");}
     static boolean trusted(Uri u){String h=u.getHost();return "https".equals(u.getScheme())&&h!=null&&(h.equals("hira.or.kr")||h.endsWith(".hira.or.kr"))&&(u.getPort()==-1||u.getPort()==443);}
     private void receive(String url,String agent,long size){
         if(downloading)return;
@@ -142,6 +170,6 @@ public class MainActivity extends Activity {
     private void renderPage(){if(pdf==null||pdf.getPageCount()==0)return;try(PdfRenderer.Page p=pdf.openPage(page)){int width=Math.min(getResources().getDisplayMetrics().widthPixels,1600);int height=Math.min(5000,Math.max(1,(int)((double)width*p.getHeight()/p.getWidth())));Bitmap b=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);b.eraseColor(Color.WHITE);p.render(b,null,null,PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);preview.setImageBitmap(b);pageLabel.setText((page+1)+" / "+pdf.getPageCount());}}
     private void closePdf(){if(pdf!=null){pdf.close();pdf=null;}if(pdfFile!=null){try{pdfFile.close();}catch(IOException ignored){}pdfFile=null;}}
     private void message(String s){if(!isFinishing())new AlertDialog.Builder(this).setMessage(s).setPositiveButton("확인",null).show();}
-    @Override public void onBackPressed(){if(portal!=null&&portal.getParent()!=null&&portal.canGoBack())portal.goBack();else showHome();}
-    @Override protected void onDestroy(){closePdf();worker.shutdownNow();if(portal!=null)portal.destroy();if(home!=null)home.destroy();super.onDestroy();}
+    @Override public void onBackPressed(){if(home.getParent()!=null){super.onBackPressed();}else if(portal!=null&&portal.getParent()!=null&&portal.canGoBack())portal.goBack();else showHome();}
+    @Override protected void onDestroy(){closePdf();for(WebView w:new java.util.ArrayList<>(authWindows)){if(w.getTag() instanceof Dialog)((Dialog)w.getTag()).dismiss();}worker.shutdownNow();if(portal!=null)portal.destroy();if(home!=null)home.destroy();super.onDestroy();}
 }
