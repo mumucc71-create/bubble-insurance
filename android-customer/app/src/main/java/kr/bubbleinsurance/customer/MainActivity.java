@@ -151,7 +151,8 @@ public class MainActivity extends Activity {
         view.setWebChromeClient(new WebChromeClient(){
             @Override public boolean onCreateWindow(WebView parent,boolean dialog,boolean gesture,Message result){
                 boolean requestedSimpleAuth=parent==portal && openSimpleAuth && parent.getUrl()!=null && trusted(Uri.parse(parent.getUrl())) && "/anyid".equals(Uri.parse(parent.getUrl()).getPath());
-                if((!gesture && !requestedSimpleAuth) || authWindows.size()>=3)return false;
+                boolean requestedRecord=autoProgress && parent.getUrl()!=null && trusted(Uri.parse(parent.getUrl())) && !"/anyid".equals(Uri.parse(parent.getUrl()).getPath());
+                if((!gesture && !requestedSimpleAuth && !requestedRecord) || authWindows.size()>=3)return false;
                 if(requestedSimpleAuth)openSimpleAuth=false;
                 WebView child=new WebView(MainActivity.this);configure(child);configurePortal(child);
                 Dialog popup=new Dialog(MainActivity.this);LinearLayout layout=new LinearLayout(MainActivity.this);layout.setOrientation(LinearLayout.VERTICAL);
