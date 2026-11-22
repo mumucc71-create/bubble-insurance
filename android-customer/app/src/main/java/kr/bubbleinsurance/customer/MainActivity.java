@@ -22,6 +22,7 @@ public class MainActivity extends Activity {
     private TextView status;
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private boolean downloading=false;
+    private boolean openSimpleAuth=false;
     private PdfRenderer pdf;
     private ParcelFileDescriptor pdfFile;
     private int page=0;
@@ -41,7 +42,7 @@ public class MainActivity extends Activity {
             @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){
                 if(!r.isForMainFrame())return false;
                 if("bubble.local".equals(r.getUrl().getHost())){
-                    if("/connect".equals(r.getUrl().getPath())) consent();
+                    if("/connect".equals(r.getUrl().getPath())) {openSimpleAuth=true;openPortal();}
                     else if("/records".equals(r.getUrl().getPath())) showRecords();
                 }
                 return true;
@@ -75,9 +76,11 @@ public class MainActivity extends Activity {
             portal.loadUrl(HIRA);
         }
         attach(portal);
+        if(openSimpleAuth && portal.getUrl()!=null){portal.evaluateJavascript("window.__bubbleNavStarted=false", value->advanceToSimpleAuth(portal,portal.getUrl()));}
     }
     private void configurePortal(WebView view){
         view.getSettings().setSupportMultipleWindows(true);
+        view.getSettings().setJavaScriptCanOpenWindowsAutomatically(true);
         view.setWebViewClient(new WebViewClient(){
             @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){
                 Uri u=r.getUrl();String scheme=u.getScheme();
@@ -96,13 +99,15 @@ public class MainActivity extends Activity {
                 return true;
             }
             @Override public void onPageStarted(WebView v,String url,Bitmap icon){if(status!=null)status.setText("심평원 연결 중…");}
-            @Override public void onPageFinished(WebView v,String url){if(status!=null&&!downloading)status.setText("본인인증 후 기록 다운로드");}
+            @Override public void onPageFinished(WebView v,String url){if(status!=null&&!downloading)status.setText("본인인증 후 기록 다운로드");advanceToSimpleAuth(v,url);}
             @Override public void onReceivedError(WebView v,WebResourceRequest r,WebResourceError e){if(r.isForMainFrame()&&status!=null)status.setText("연결 실패 · 다시 시도");}
             @Override public void onReceivedHttpError(WebView v,WebResourceRequest r,WebResourceResponse response){if(r.isForMainFrame()&&status!=null)status.setText("사이트 응답 오류 · 다시 시도");}
         });
         view.setWebChromeClient(new WebChromeClient(){
             @Override public boolean onCreateWindow(WebView parent,boolean dialog,boolean gesture,Message result){
-                if(!gesture || authWindows.size()>=3)return false;
+                boolean requestedSimpleAuth=parent==portal && openSimpleAuth && parent.getUrl()!=null && trusted(Uri.parse(parent.getUrl())) && "/anyid".equals(Uri.parse(parent.getUrl()).getPath());
+                if((!gesture && !requestedSimpleAuth) || authWindows.size()>=3)return false;
+                if(requestedSimpleAuth)openSimpleAuth=false;
                 WebView child=new WebView(MainActivity.this);configure(child);configurePortal(child);
                 Dialog popup=new Dialog(MainActivity.this);LinearLayout layout=new LinearLayout(MainActivity.this);layout.setOrientation(LinearLayout.VERTICAL);
                 layout.addView(button("인증 창 닫기",popup::dismiss));layout.addView(child,new LinearLayout.LayoutParams(-1,0,1));
@@ -114,6 +119,16 @@ public class MainActivity extends Activity {
             @Override public void onCloseWindow(WebView window){if(window.getTag() instanceof Dialog)((Dialog)window.getTag()).dismiss();}
         });
         view.setDownloadListener((url,agent,disposition,mime,size)->receive(url,agent,size));
+    }
+    private void advanceToSimpleAuth(WebView view,String url){
+        if(!openSimpleAuth || view!=portal || url==null)return;
+        Uri uri=Uri.parse(url);if(!trusted(uri))return;
+        boolean intro="/dummy.do".equals(uri.getPath()) && "HIRAA030009200000".equals(uri.getQueryParameter("pgmid"));
+        boolean auth="/anyid".equals(uri.getPath());if(!intro&&!auth)return;
+        String selector=intro ? "Array.from(document.querySelectorAll('a')).find(a=>a.textContent.replace(/\\s/g,'').includes('내진료정보열람')&&a.textContent.includes('조회하기'))" : "document.querySelector('a[title=\"간편인증 새창열림\"]')";
+        // Only advance the two public navigation controls. Never fill identity fields,
+        // choose a certificate provider, accept terms or submit an authentication request.
+        view.evaluateJavascript("(function(){if(window.__bubbleNavStarted)return;window.__bubbleNavStarted=true;let n=0;function next(){let a="+selector+";if(a&&a.getClientRects().length){a.click();return;}if(++n<60)setTimeout(next,500);}next();})()",null);
     }
     private static boolean unsafeScheme(String s){return s==null||s.matches("(?i)(file|content|javascript|data|http|intent|about)");}
     static boolean trusted(Uri u){String h=u.getHost();return "https".equals(u.getScheme())&&h!=null&&(h.equals("hira.or.kr")||h.endsWith(".hira.or.kr"))&&(u.getPort()==-1||u.getPort()==443);}
