@@ -54,7 +54,7 @@ public class MainActivity extends Activity {
         w.getSettings().setAllowFileAccess(false);w.getSettings().setAllowContentAccess(false);
         w.getSettings().setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         w.getSettings().setSupportMultipleWindows(false);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(w,false);
+        android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(w,false);
         w.setWebChromeClient(new WebChromeClient());
     }
     private void attach(View v){if(v.getParent()!=null)((android.view.ViewGroup)v.getParent()).removeView(v);root.addView(v,new LinearLayout.LayoutParams(-1,0,1));}
@@ -94,7 +94,7 @@ public class MainActivity extends Activity {
         if(!trusted(Uri.parse(url))){message("이 다운로드 방식은 아직 지원하지 않습니다. 파일을 받지 않았습니다.");return;}
         if(size>30*1024*1024){message("파일이 너무 큽니다. 최대 30MB까지 받을 수 있습니다.");return;}
         downloading=true;status.setText("진료기록 받는 중…");
-        final String cookies=CookieManager.getInstance().getCookie(url);
+        final String cookies=android.webkit.CookieManager.getInstance().getCookie(url);
         worker.execute(()->{
             File tmp=null;
             try {
