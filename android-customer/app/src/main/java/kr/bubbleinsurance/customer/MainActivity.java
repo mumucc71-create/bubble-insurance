@@ -29,6 +29,9 @@ public class MainActivity extends Activity {
     private final java.util.Map<WebView,BubbleWaitView> popupCovers=new java.util.HashMap<>();
     private int loadingSession=0;
     private boolean preparing=false;
+    private final java.util.Map<WebView,TextView> consentHints=new java.util.HashMap<>();
+    private String consentGuideScript;
+    private boolean guideLoopStarted=false;
     private PdfRenderer pdf;
     private ParcelFileDescriptor pdfFile;
     private int page=0;
@@ -41,6 +44,7 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(Color.rgb(227,236,243));
         getWindow().setNavigationBarColor(Color.WHITE);
         records=new File(getFilesDir(),"records"); records.mkdirs();
+        try(java.io.InputStream in=getAssets().open("consent-guide.js")){java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1)out.write(b,0,n);consentGuideScript=out.toString("UTF-8");}catch(Exception ignored){}
         root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundColor(Color.WHITE);setContentView(root);
         root.setOnApplyWindowInsetsListener((v,insets)->{root.setPadding(0,insets.getSystemWindowInsetTop(),0,insets.getSystemWindowInsetBottom());return insets.consumeSystemWindowInsets();});
         home=new WebView(this); configure(home);
@@ -81,7 +85,9 @@ public class MainActivity extends Activity {
             configurePortal(portal);
             portal.loadUrl(HIRA);
         }
+        TextView hint=consentHints.get(portal);if(hint==null){hint=makeConsentHint();consentHints.put(portal,hint);}if(hint.getParent()!=null)((android.view.ViewGroup)hint.getParent()).removeView(hint);root.addView(hint);
         attach(portal);
+        startGuideLoop();
         if(openSimpleAuth || selectKakao)beginPreparation();
         if(openSimpleAuth && portal.getUrl()!=null){portal.evaluateJavascript("window.__bubbleNavStarted=false", value->advanceToSimpleAuth(portal,portal.getUrl()));}
     }
@@ -106,7 +112,7 @@ public class MainActivity extends Activity {
                 return true;
             }
             @Override public void onPageStarted(WebView v,String url,Bitmap icon){if(status!=null)status.setText("심평원 연결 중…");}
-            @Override public void onPageFinished(WebView v,String url){if(status!=null&&!downloading)status.setText("본인인증 후 기록 다운로드");advanceToSimpleAuth(v,url);advanceToKakao(v,url);}
+            @Override public void onPageFinished(WebView v,String url){if(status!=null&&!downloading)status.setText("본인인증 후 기록 다운로드");advanceToSimpleAuth(v,url);advanceToKakao(v,url);updateConsentGuide(v);}
             @Override public void onReceivedError(WebView v,WebResourceRequest r,WebResourceError e){if(r.isForMainFrame()&&status!=null)status.setText("연결 실패 · 다시 시도");}
             @Override public void onReceivedHttpError(WebView v,WebResourceRequest r,WebResourceResponse response){if(r.isForMainFrame()&&status!=null)status.setText("사이트 응답 오류 · 다시 시도");}
         });
@@ -117,10 +123,10 @@ public class MainActivity extends Activity {
                 if(requestedSimpleAuth)openSimpleAuth=false;
                 WebView child=new WebView(MainActivity.this);configure(child);configurePortal(child);
                 Dialog popup=new Dialog(MainActivity.this);LinearLayout layout=new LinearLayout(MainActivity.this);layout.setOrientation(LinearLayout.VERTICAL);
-                layout.addView(button("인증 창 닫기",popup::dismiss));layout.addView(child,new LinearLayout.LayoutParams(-1,0,1));
+                layout.addView(button("인증 창 닫기",popup::dismiss));TextView childHint=makeConsentHint();consentHints.put(child,childHint);layout.addView(childHint);layout.addView(child,new LinearLayout.LayoutParams(-1,0,1));
                 FrameLayout stage=new FrameLayout(MainActivity.this);stage.setBackgroundColor(Color.WHITE);stage.addView(layout,new FrameLayout.LayoutParams(-1,-1));
                 if(preparing){BubbleWaitView cover=new BubbleWaitView(MainActivity.this);popupCovers.put(child,cover);stage.addView(cover,new FrameLayout.LayoutParams(-1,-1));}
-                popup.setContentView(stage);popup.setOnDismissListener(d->{popupCovers.remove(child);authWindows.remove(child);child.destroy();if(preparing)cancelPreparation();});
+                popup.setContentView(stage);popup.setOnDismissListener(d->{popupCovers.remove(child);consentHints.remove(child);authWindows.remove(child);child.destroy();if(preparing)cancelPreparation();});
                 authWindows.add(child);popup.show();popup.getWindow().setLayout(-1,-1);
                 child.setTag(popup);
                 ((WebView.WebViewTransport)result.obj).setWebView(child);result.sendToTarget();return true;
@@ -148,6 +154,30 @@ public class MainActivity extends Activity {
         // consent checkboxes or authentication submission are touched.
         view.evaluateJavascript("(function(){if(window.__bubbleKakaoStarted)return;window.__bubbleKakaoStarted=true;let n=0;function choose(){let img=document.querySelector('img[alt=\"KAKAO(카카오)\"]');let a=img&&img.closest('a');if(a&&a.getClientRects().length){a.click();requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__bubbleKakaoReady=true;}));return;}if(++n<60)setTimeout(choose,500);}choose();})()",null);
         checkAuthReady(view,loadingSession,0);
+    }
+    private TextView makeConsentHint(){
+        TextView hint=new TextView(this);hint.setTextSize(22);hint.setTextColor(NAVY);hint.setBackgroundColor(Color.rgb(227,236,243));
+        int p=(int)(16*getResources().getDisplayMetrics().density);hint.setPadding(p,p,p,p);hint.setGravity(Gravity.CENTER);
+        hint.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);hint.setVisibility(View.GONE);return hint;
+    }
+    private void startGuideLoop(){if(guideLoopStarted)return;guideLoopStarted=true;loadingHandler.post(new Runnable(){public void run(){if(isFinishing()||isDestroyed())return;if(portal!=null&&portal.getParent()!=null)updateConsentGuide(portal);for(WebView w:new java.util.ArrayList<>(authWindows))updateConsentGuide(w);loadingHandler.postDelayed(this,650);}});}
+    private void updateConsentGuide(WebView view){
+        TextView hint=consentHints.get(view);if(hint==null)return;String url=view.getUrl();
+        if(preparing||url==null||!trusted(Uri.parse(url))||"/anyid".equals(Uri.parse(url).getPath())||consentGuideScript==null){hint.setVisibility(View.GONE);return;}
+        final String expected=url;
+        view.evaluateJavascript(consentGuideScript+";JSON.stringify(window.__bubbleConsentGuide.state)",result->{
+            if(isFinishing()||!expected.equals(view.getUrl())||!consentHints.containsKey(view))return;
+            try{
+                Object decoded=new org.json.JSONTokener(result).nextValue();if(!(decoded instanceof String))return;
+                org.json.JSONObject state=new org.json.JSONObject((String)decoded);String kind=state.optString("kind");String text="";
+                if("scroll".equals(kind))text="up".equals(state.optString("direction"))?"↑ 위로 조금 올려주세요":"↓ 아래로 내려주세요";
+                else if("consent".equals(kind))text="☝ 내용을 확인하고\n동의하시면 표시된 항목을 눌러주세요";
+                else if("next".equals(kind))text="☝ 선택 내용을 확인한 뒤\n테두리가 표시된 버튼을 눌러주세요";
+                else if("declined".equals(kind))text="동의하지 않음을 선택하셨어요.\n화면의 진행 조건을 확인해 주세요";
+                else if("review".equals(kind))text="선택 내용을 확인한 뒤\n화면의 다음 안내를 따라주세요";
+                if(text.isEmpty()){hint.setVisibility(View.GONE);}else{if(!text.contentEquals(hint.getText()))hint.setText(text);hint.setVisibility(View.VISIBLE);}
+            }catch(Exception ignored){hint.setVisibility(View.GONE);}
+        });
     }
     private void beginPreparation(){
         removeCover(waitCover);waitCover=new BubbleWaitView(this);preparing=true;final int session=++loadingSession;
