@@ -45,3 +45,9 @@ JDK 17 이상, Android SDK 35, Gradle 8.10.2.
 - Detect empty loaded pages and display explicit retry/home recovery for main-frame failures and preparation timeout. No TLS bypass or automatic consent.
 - Compiled with Android 35 tools; authenticated device flow is not yet verified.
 - The original debug signing key is unavailable in this environment. Delivered diagnostic APK uses package kr.bubbleinsurance.customer.test, label 버블보험 테스트, and a separate test key; it installs beside the existing app.
+
+## 0.1.9 — consent and five-year import test
+- HIRA record-page consent items are presented in native popups with the current page text. Each choice must be explicitly selected. Changed text, ambiguous controls, refusal of required consent, or unrecognized pages stop automation.
+- After consent, recognised next controls, five-year period, query, and the single full-download control are clicked once. Authentication remains customer-operated. The home design is unchanged.
+- Successful file download opens an import prompt. PDF and XLSX (including XLSX-only ZIP bundles) can be displayed locally; completion appears only after display. Binary XLS and other archive contents explicitly report unsupported format, not completion. No server upload.
+- Node fixture tests cover explicit consent, refusal, optional refusal, stale page text, five-year query ordering and duplicate download suppression. Java compilation and APK signature are checked. The authenticated HIRA flow still requires a real-device test; POST/blob downloads remain unsupported.

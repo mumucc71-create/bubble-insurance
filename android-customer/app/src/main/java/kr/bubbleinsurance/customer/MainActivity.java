@@ -34,6 +34,7 @@ public class MainActivity extends Activity {
     private boolean guideLoopStarted=false;
     private boolean connectionProblemShown=false;
     private boolean noticeOpen=false;
+    private boolean autoProgress=false;
     private PdfRenderer pdf;
     private ParcelFileDescriptor pdfFile;
     private int page=0;
@@ -89,7 +90,7 @@ public class MainActivity extends Activity {
         cancelPreparation();
         for(WebView w:new java.util.ArrayList<>(authWindows))if(w.getTag() instanceof Dialog)((Dialog)w.getTag()).dismiss();
         if(portal!=null){TextView hint=consentHints.remove(portal);if(hint!=null)removeCover(hint);removeCover(portal);portal.stopLoading();portal.destroy();}
-        connectionProblemShown=false;
+        connectionProblemShown=false;autoProgress=false;
         openSimpleAuth=true;selectKakao=true;
         portal=new WebView(this);configure(portal);configurePortal(portal);
         TextView hint=makeConsentHint();consentHints.put(portal,hint);root.addView(hint);
@@ -196,11 +197,13 @@ public class MainActivity extends Activity {
         TextView hint=consentHints.get(view);if(hint==null)return;String url=view.getUrl();
         if(preparing||url==null||!trusted(Uri.parse(url))||"/anyid".equals(Uri.parse(url).getPath())||consentGuideScript==null){hint.setVisibility(View.GONE);return;}
         final String expected=url;
-        view.evaluateJavascript(consentGuideScript+";JSON.stringify({state:window.__bubbleConsentGuide.state,intro:window.__bubbleConsentGuide.intro()})",result->{
+        view.evaluateJavascript(consentGuideScript+";window.__bubbleConsentGuide.setEnabled("+autoProgress+");window.__bubbleConsentGuide.update();JSON.stringify({state:window.__bubbleConsentGuide.state,intro:window.__bubbleConsentGuide.intro(),consents:window.__bubbleConsentGuide.consents()})",result->{
             if(isFinishing()||!expected.equals(view.getUrl())||!consentHints.containsKey(view))return;
             try{
                 Object decoded=new org.json.JSONTokener(result).nextValue();if(!(decoded instanceof String))return;
-                org.json.JSONObject payload=new org.json.JSONObject((String)decoded);org.json.JSONObject intro=payload.optJSONObject("intro");if(intro!=null&&!noticeOpen){showNotice(view,expected,intro.optString("text"));return;}org.json.JSONObject state=payload.getJSONObject("state");String kind=state.optString("kind");String text="";
+                org.json.JSONObject payload=new org.json.JSONObject((String)decoded);org.json.JSONObject intro=payload.optJSONObject("intro");if(intro!=null&&!noticeOpen){showNotice(view,expected,intro.optString("text"));return;}org.json.JSONObject consent=payload.optJSONObject("consents");if(consent!=null&&!noticeOpen){showConsents(view,expected,consent);return;}org.json.JSONObject state=payload.getJSONObject("state");String kind=state.optString("kind");String text="";
+                if("querying".equals(kind)||"advancing".equals(kind))status.setText("5년간 진료기록 조회 중…");
+                if("downloading".equals(kind))status.setText("진료기록 다운로드 요청 중…");
                 if("scroll".equals(kind))text="up".equals(state.optString("direction"))?"↑ 위로 조금 올려주세요":"↓ 아래로 내려주세요";
                 else if("consent".equals(kind))text="☝ 내용을 확인하고\n동의하시면 표시된 항목을 눌러주세요";
                 else if("next".equals(kind))text="☝ 선택 내용을 확인한 뒤\n테두리가 표시된 버튼을 눌러주세요";
@@ -226,10 +229,36 @@ public class MainActivity extends Activity {
             agree.setEnabled(false);
             if(!consentHints.containsKey(view)||!expected.equals(view.getUrl())){dialog.dismiss();return;}
             view.evaluateJavascript("window.__bubbleConsentGuide&&window.__bubbleConsentGuide.acceptIntro("+org.json.JSONObject.quote(text)+")",result->{
-                dialog.dismiss();if(!"true".equals(result))message("화면이 변경되어 자동으로 이동하지 않았어요. 현재 화면의 안내를 확인해 주세요.");
+                if("true".equals(result))autoProgress=true;dialog.dismiss();if(!"true".equals(result))message("화면이 변경되어 자동으로 이동하지 않았어요. 현재 화면의 안내를 확인해 주세요.");
             });
         });
         dialog.show();
+    }
+    private void showConsents(WebView view,String expected,org.json.JSONObject consent){
+        if(noticeOpen)return;noticeOpen=true;
+        LinearLayout body=new LinearLayout(this);body.setOrientation(LinearLayout.VERTICAL);body.setPadding(24,20,24,16);
+        ScrollView scroll=new ScrollView(this);LinearLayout items=new LinearLayout(this);items.setOrientation(LinearLayout.VERTICAL);scroll.addView(items);
+        TextView terms=new TextView(this);terms.setText(consent.optString("text"));terms.setTextSize(18);items.addView(terms);
+        org.json.JSONArray choices=consent.optJSONArray("choices");if(choices==null){noticeOpen=false;return;}
+        java.util.ArrayList<RadioGroup> groups=new java.util.ArrayList<>();
+        for(int i=0;i<choices.length();i++){
+            org.json.JSONObject choice=choices.optJSONObject(i);TextView label=new TextView(this);label.setText(choice.optString("label"));label.setTextSize(20);items.addView(label);
+            RadioGroup group=new RadioGroup(this);RadioButton yes=new RadioButton(this);yes.setId(View.generateViewId());yes.setText("동의합니다");yes.setTextSize(19);group.addView(yes);
+            RadioButton no=new RadioButton(this);no.setId(View.generateViewId());no.setText("동의하지 않습니다");no.setTextSize(19);group.addView(no);items.addView(group);groups.add(group);
+        }
+        body.addView(scroll,new LinearLayout.LayoutParams(-1,(int)(getResources().getDisplayMetrics().heightPixels*.6)));
+        final boolean[] applied={false};
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("동의 내용을 확인해 주세요").setView(body).setNegativeButton("나중에",null).setPositiveButton("선택 완료",null).create();
+        dialog.setOnDismissListener(d->{noticeOpen=false;if(!applied[0]&&consentHints.containsKey(view)&&expected.equals(view.getUrl()))view.evaluateJavascript("window.__bubbleConsentGuide&&window.__bubbleConsentGuide.pause()",null);});
+        dialog.setOnShowListener(d->{Button finish=dialog.getButton(AlertDialog.BUTTON_POSITIVE);finish.setEnabled(false);
+            for(RadioGroup group:groups)group.setOnCheckedChangeListener((g,id)->{boolean ready=true;for(RadioGroup x:groups)if(x.getCheckedRadioButtonId()==-1)ready=false;finish.setEnabled(ready);});
+            finish.setOnClickListener(v->{if(!consentHints.containsKey(view)||!expected.equals(view.getUrl())){dialog.dismiss();return;}finish.setEnabled(false);
+                org.json.JSONArray decisions=new org.json.JSONArray();boolean mayContinue=true;
+                for(int i=0;i<groups.size();i++){RadioGroup g=groups.get(i);boolean yes=g.getCheckedRadioButtonId()==g.getChildAt(0).getId();decisions.put(yes);if(!yes&&!choices.optJSONObject(i).optBoolean("optional"))mayContinue=false;}
+                final boolean proceed=mayContinue;
+                view.evaluateJavascript("window.__bubbleConsentGuide&&window.__bubbleConsentGuide.applyConsents("+org.json.JSONObject.quote(consent.toString())+","+decisions.toString()+")",result->{applied[0]="true".equals(result);autoProgress=applied[0]&&proceed;dialog.dismiss();if(!applied[0])message("화면이 바뀌어 선택을 적용하지 못했어요. 현재 내용을 다시 확인해 주세요.");});
+            });
+        });dialog.show();
     }
     private void beginPreparation(){
         removeCover(waitCover);waitCover=new BubbleWaitView(this);preparing=true;final int session=++loadingSession;
@@ -283,16 +312,25 @@ public class MainActivity extends Activity {
                 else if((magic[0]&255)==0xd0&&(magic[1]&255)==0xcf)ext=".xls";
                 else throw new IOException("unsupported format");
                 File saved=new File(records,"진료기록-"+System.currentTimeMillis()+ext);if(!tmp.renameTo(saved))throw new IOException();
-                runOnUiThread(()->{downloading=false;showRecords();message("기록을 앱에 저장했어요. 서버에는 전송하지 않았습니다.");});
+                runOnUiThread(()->{downloading=false;autoProgress=false;status.setText("다운로드 완료");new AlertDialog.Builder(this).setTitle("버블앱으로 불러오기").setMessage("다운로드한 5년간 진료기록을 불러올까요?").setNegativeButton("나중에",null).setPositiveButton("불러오기",(d,w)->importRecord(saved)).show();});
             }catch(Exception e){if(tmp!=null)tmp.delete();runOnUiThread(()->{downloading=false;if(status!=null)status.setText("파일 받기 실패");message("파일을 받지 못했습니다. 인증 만료 또는 지원하지 않는 다운로드 형식일 수 있습니다. 다시 다운로드해 주세요.");});}
         });
+    }
+    private void importRecord(File file){
+        if(file.getName().endsWith(".pdf")){openPdf(file);if(pdf!=null)message("불러오기 완료");return;}
+        toolbar("진료기록 불러오는 중…");
+        TextView waiting=new TextView(this);waiting.setText("진료기록을 불러오고 있어요.");waiting.setTextSize(20);attach(waiting);
+        worker.execute(()->{try{
+            String html=RecordReader.read(file);
+            runOnUiThread(()->{if(isFinishing())return;toolbar("진료기록");bar.addView(button("목록",this::showRecords));WebView record=new WebView(this);record.getSettings().setJavaScriptEnabled(false);record.getSettings().setAllowFileAccess(false);record.getSettings().setAllowContentAccess(false);record.setWebViewClient(new WebViewClient(){boolean finished=false;@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return true;}@Override public void onPageFinished(WebView v,String url){if(!finished&&v.getParent()!=null){finished=true;status.setText("불러오기 완료");message("불러오기 완료");}}});attach(record);record.loadDataWithBaseURL(null,html,"text/html","UTF-8",null);});
+        }catch(Exception e){runOnUiThread(()->{showRecords();message("파일은 받았지만 내용을 불러오지 못했어요. "+e.getMessage());});}});
     }
     private void showRecords(){
         closePdf();toolbar("받은 진료기록");ScrollView scroll=new ScrollView(this);LinearLayout list=new LinearLayout(this);list.setPadding(24,20,24,24);list.setOrientation(LinearLayout.VERTICAL);scroll.addView(list);attach(scroll);
         File[] files=records.listFiles((dir,name)->!name.endsWith(".part"));
         if(files==null||files.length==0){TextView empty=new TextView(this);empty.setText("아직 받은 진료기록이 없어요.");empty.setTextColor(NAVY);list.addView(empty);return;}
         java.util.Arrays.sort(files,(a,b)->Long.compare(b.lastModified(),a.lastModified()));
-        for(File f:files){list.addView(button(f.getName(),()->{if(f.getName().endsWith(".pdf"))openPdf(f);else message("파일은 저장되었습니다. 이 형식의 내용 보기는 아직 준비 중입니다.");}));list.addView(button("삭제",()->new AlertDialog.Builder(this).setMessage("이 기록을 기기에서 삭제할까요?").setNegativeButton("취소",null).setPositiveButton("삭제",(d,w)->{if(!f.delete())message("삭제하지 못했습니다.");showRecords();}).show()));}
+        for(File f:files){list.addView(button(f.getName(),()->{if(f.getName().endsWith(".pdf"))openPdf(f);else importRecord(f);}));list.addView(button("삭제",()->new AlertDialog.Builder(this).setMessage("이 기록을 기기에서 삭제할까요?").setNegativeButton("취소",null).setPositiveButton("삭제",(d,w)->{if(!f.delete())message("삭제하지 못했습니다.");showRecords();}).show()));}
     }
     private void openPdf(File file){
         closePdf();
